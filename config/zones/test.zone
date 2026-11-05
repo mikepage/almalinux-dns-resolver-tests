@@ -6,5 +6,7 @@ ns1         A   10.53.0.5
 www.lab     A   10.10.0.10
 ; short TTL, used by the stale-cache scenario
 short.lab 5 A   10.10.0.11
+; managed-database style record: 15 s TTL, IP changes on failover (tests/db-failover.sh)
+mysql.db.lab 15 A 10.20.0.1
 ; every u<random>.lab.test resolves, so each query is a cache miss
 *.lab    60 A   10.10.0.99

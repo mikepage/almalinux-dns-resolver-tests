@@ -73,3 +73,9 @@ services:
     <<: *node
     hostname: client-unbound
     networks: { vpsnet: { ipv4_address: 10.53.0.105 } }
+
+  # Local unbound doing full recursion itself, no forwarders, local root zone copy.
+  client-recursive:
+    <<: *node
+    hostname: client-recursive
+    networks: { vpsnet: { ipv4_address: 10.53.0.106 } }

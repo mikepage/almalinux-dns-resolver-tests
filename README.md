@@ -5,20 +5,24 @@ Fully offline: a fake root and `test.` zone stand in for the internet.
 
 ## Conclusion
 
-**Best setup:** local unbound on every VM, forwarding to the provider resolvers with
-`forward-first: yes`, `infra-cache-max-rtt: 500` and `infra-host-ttl: 60`.
+**Best setup:** local unbound on every VM doing **full recursion**: no forwarders, a local
+copy of the root zone, `serve-expired`. It doesn't use the provider's resolvers at all, so no
+provider resolver failure affects it, and there is no failover to tune.
 See [Recommended setup](#recommended-setup).
 
-In normal operation unbound uses only the provider resolvers. Packet count for 20 cache-miss
-lookups: 13 to provider-dns1, 7 to provider-dns2, 0 to the root, 0 to the public resolver.
-It resolves from the root itself only while both providers fail.
+**Second best:** local unbound **forwarding** to the provider resolvers with
+`forward-first: yes`, `infra-cache-max-rtt: 500` and `infra-host-ttl: 60`. Use it only when
+you need the provider's resolvers, for example for provider-internal names or when outbound
+DNS is blocked. Without the two `infra-*` settings it is much worse,
+see [Unbound tuning results](#unbound-tuning-results).
 
 ### Expected downtime when both provider resolvers go down
 
 | Setup | During the outage | After the providers recover |
 |---|---|---|
-| **unbound, tuned (recommended)** | **No downtime.** First lookup takes ~0.8 s, then normal | Back on the providers within ~60 s |
-| unbound, defaults | All lookups fail for ~5 min, then normal | Back on the providers |
+| **unbound, full recursion (recommended)** | **No impact.** Never uses the providers | No impact |
+| unbound, forwarding, tuned | No downtime. First lookup takes ~0.7 s, then normal | Back on the providers within ~60 s |
+| unbound, forwarding, defaults | All lookups fail for ~5 min, then normal | Back on the providers |
 | resolved, public resolver in `DNS=` | First lookup takes ~10 s, then normal | Stays on the public resolver until it fails or resolved restarts |
 | **resolved, `FallbackDNS=` public** | **Down for the whole outage.** Every lookup fails after 10 s | OK |
 | glibc only (EL default) | Down for the whole outage. Every lookup fails after 20 s | OK |
@@ -31,35 +35,57 @@ lasts, and every lookup blocks for 10 s before failing.
 
 | Setup | Impact |
 |---|---|
-| unbound, tuned | First lookup up to 0.4 s, then normal |
+| unbound, full recursion | None |
+| unbound, forwarding, tuned | First lookup up to 0.4 s, then normal |
 | resolved (both configs) | First lookup 5 s, then normal |
 | glibc only | Every lookup 5 s slower for the whole outage |
 | glibc, `timeout:1 attempts:2` | Every lookup 1 s slower for the whole outage |
 
-Caveat: lab numbers, one run with 5 lookups per client. Not yet checked against real domains,
-see [Not tested yet](#not-tested-yet).
+### Managed database failover (15 s TTL)
+
+A managed database hostname with a 15 s TTL changes IP. Seconds until each client returns the
+new IP (cache warmed 5 s before the change, so ~10 s of TTL left):
+
+| Setup | Providers healthy | Providers down |
+|---|---:|---|
+| unbound, full recursion | 8.6 | 8.1 |
+| unbound, forwarding, tuned | 10.1 | 8.7 |
+| resolved, public resolver in `DNS=` | 10.1 | 20.2 |
+| resolved, `FallbackDNS=` public | 10.1 | **never**: old IP until expiry, then failures |
+| glibc only | 10.0 | **never**: every lookup fails |
+| glibc, `timeout:1 attempts:2` | 10.1 | **never**: every lookup fails |
+
+No client kept the old IP past its TTL, including through two caches (provider + local).
+Never set `cache-min-ttl`: it would keep the old IP after a failover. Keep
+`serve-expired-client-timeout` above 0: with 0, unbound serves an expired IP right away even
+when the authoritative server is reachable.
+
+Caveat: lab numbers, one run with 5 lookups per client. In the lab the authoritative servers
+are local, so full-recursion cache misses are as fast as forwarding; on the internet they take
+tens of ms. See [Not tested yet](#not-tested-yet).
 
 ## Results (2026-11-05, N=5)
 
 `ok` = successful lookups. Times in seconds. Clients are described under [Topology](#topology),
 scenarios and per-client p50/p95/max under [Detailed results](#detailed-results).
 
-| Scenario | glibc | glibc-tuned | resolved | resolved-public | unbound |
-|---|---|---|---|---|---|
-| baseline | 5/5, p50 0.002 | 5/5, p50 0.003 | 5/5, p50 0.003 | 5/5, p50 0.002 | 5/5, p50 0.002 |
-| dns1 timeout | 5/5, every query 5.0 | 5/5, every query 1.0 | 5/5, first query 5.0 | 5/5, first query 5.0 | 5/5, max 0.30 |
-| dns1 host gone | 5/5, every query 5.0 | 5/5, every query 1.0 | 5/5, first query 5.0 | 5/5, first query 5.0 | 5/5, max 0.39 |
-| dns1 SERVFAIL | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 |
-| both providers down | 0/5, 20.0 each | 0/5, 4.0 each | **0/5**, 10.0 each | 4/5, first query 10.0 | 5/5, max 0.67 |
-| providers + public down | 0/5 | 0/5 | 0/5 | 0/5 | 5/5, max 0.68 |
-| everything down, expired cache | 0/3 | 0/3 | 0/3 | 0/3 | 3/3 (stale), max 1.42 |
-| providers back after 70s | ok | ok | ok, back on provider | **stuck on public** | ok, back on provider |
+| Scenario | glibc | glibc-tuned | resolved | resolved-public | unbound forward | unbound recursive |
+|---|---|---|---|---|---|---|
+| baseline | 5/5, p50 0.002 | 5/5, p50 0.002 | 5/5, p50 0.002 | 5/5, p50 0.004 | 5/5, p50 0.003 | 5/5, p50 0.002 |
+| dns1 timeout | 5/5, every query 5.0 | 5/5, every query 1.0 | 5/5, first query 5.0 | 5/5, first query 5.0 | 5/5, max 0.30 | 5/5, max 0.002 |
+| dns1 host gone | 5/5, every query 5.0 | 5/5, every query 1.0 | 5/5, first query 5.0 | 5/5, first query 5.0 | 5/5, max 0.39 | 5/5, max 0.002 |
+| dns1 SERVFAIL | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 |
+| both providers down | 0/5, 20.0 each | 0/5, 4.0 each | **0/5**, 10.0 each | 4/5, first query 10.0 | 5/5, max 0.68 | 5/5, max 0.004 |
+| providers + public down | 0/5 | 0/5 | 0/5 | 0/5 | 5/5, max 0.67 | 5/5, max 0.002 |
+| everything down, expired cache | 0/3 | 0/3 | 0/3 | 0/3 | 3/3 (stale), max 0.96 | 3/3 (stale), 1.8 each |
+| providers back after 70s | ok | ok | ok, back on provider | **stuck on public** | ok, back on provider | ok |
 
-The unbound column uses the tuned config below. With unbound defaults it does much worse.
+"unbound forward" uses the tuned config. With unbound defaults it does much worse.
 
 ## Unbound tuning results
 
-`tests/unbound-tuning.sh`, client-unbound only, one run per variant.
+Applies to the forwarding setup only. `tests/unbound-tuning.sh`, client-unbound only, one run
+per variant.
 
 - **Failover:** both provider resolvers time out. 6 lookups (`dig`, 60 s timeout).
   How long until unbound answers by resolving from the root itself?
@@ -79,6 +105,8 @@ The unbound column uses the tuned config below. With unbound defaults it does mu
   `max-rtt` makes unbound mark them dead quickly, the default keeps it off the providers for
   up to 15 minutes after they recover.
 - Defaults pass recovery only because unbound never gave up on the providers in the first place.
+- Full recursion doesn't need these settings. Keep the defaults there: `infra-cache-max-rtt: 500`
+  would make unbound give up on slow authoritative servers too early.
 
 ## Findings
 
@@ -89,32 +117,39 @@ The unbound column uses the tuned config below. With unbound defaults it does mu
    keeps using it after the provider recovers.
 3. **`StaleRetentionSec=` is ignored on EL9.** It needs systemd 254+; EL9 ships 252.
 4. **glibc alone** pays the full timeout on every query while dns1 is down (no memory of dead
-   servers). Default settings: 5 s per query, 20 s to fail.
-5. **unbound** fails over in under 1 s, resolves from the root itself when all resolvers are
-   down, serves stale data when everything is down, and returns to the provider resolvers.
-   But only with two tuned settings: with unbound defaults the first answer came after 5 min.
-   See [Unbound tuning results](#unbound-tuning-results).
+   servers). Default settings: 5 s per query, 20 s to fail. glibc uses at most 3 `nameserver`
+   lines; any further ones are ignored.
+5. **unbound with full recursion** is unaffected by any provider resolver failure, and serves
+   stale data when everything is down.
+6. **unbound forwarding** fails over in under 1 s and returns to the providers, but only with
+   two tuned settings: with unbound defaults the first answer came after 5 min.
 
 ## Recommended setup
 
-Local unbound on every VM, forwarding to the provider resolvers. See `config/unbound-client.conf`.
+Local unbound on every VM, full recursion. See `config/unbound-recursive-client.conf`.
 
 ```
 server:
   interface: 127.0.0.1
-  infra-cache-max-rtt: 500     # default 120000: 5 min before fallback
-  infra-host-ttl: 60           # default 900: 15 min before returning to the providers
   prefetch: yes
   serve-expired: yes
   serve-expired-ttl: 86400
-  serve-expired-client-timeout: 1800
+  serve-expired-client-timeout: 1800   # 0 serves expired records before trying upstream
+  msg-cache-size: 64m
+  rrset-cache-size: 128m
   # keep the default DNSSEC validator + root trust anchor (the lab disables it)
 
-forward-zone:
+# Local copy of the root zone (RFC 8806): no root server round trips, root stays
+# reachable from cache.
+auth-zone:
   name: "."
-  forward-addr: <provider resolver 1>
-  forward-addr: <provider resolver 2>
-  forward-first: yes           # providers fail -> resolve from the root ourselves
+  primary: 170.247.170.2        # b.root-servers.net
+  primary: 192.33.4.12          # c.root-servers.net
+  primary: 192.5.5.241          # f.root-servers.net
+  primary: 193.0.14.129         # k.root-servers.net
+  fallback-enabled: yes
+  for-downstream: no
+  for-upstream: yes
 ```
 
 Plus:
@@ -124,13 +159,12 @@ Plus:
 - Disable systemd-resolved.
 - unbound drop-in with `Restart=always`; the stock unit has no restart.
 
-No public resolver needed: unbound's own recursion is the fallback, and it doesn't hand
-all lookups to a public resolver.
+Need the provider's resolvers? Use `config/unbound-client.conf` instead: the same, plus a
+`forward-zone` with `forward-first: yes` and the two `infra-*` settings.
 
 ## Not tested yet
 
-- `infra-cache-max-rtt: 500` also applies to authoritative servers during recursion. A far-away
-  authoritative with RTT > 500 ms could be treated as down. Test against real domains on a staging VM.
+- Full recursion against real domains: cache-miss latency and slow authoritative servers.
 - IPv6 and TCP fallback.
 - Load (e.g. `dnsperf`).
 
@@ -146,6 +180,7 @@ all lookups to a public resolver.
 | client-resolved | .103 | systemd-resolved, `DNS=` providers, `FallbackDNS=` public |
 | client-resolved-public | .104 | systemd-resolved, public resolver as third `DNS=` entry |
 | client-unbound | .105 | local unbound, forwards to providers, `forward-first`, `serve-expired` |
+| client-recursive | .106 | local unbound, full recursion, local root zone copy, `serve-expired` |
 
 All nodes are `almalinux/9-init` containers with real systemd (systemd 252, same as every EL9 server).
 
@@ -153,10 +188,12 @@ All nodes are `almalinux/9-init` containers with real systemd (systemd 252, same
 
 ```bash
 docker compose up -d --build
-tests/run.sh                 # all scenarios, ~6 min
-tests/run.sh provider-down   # one scenario
-N=20 tests/run.sh            # more queries per client
-tests/unbound-tuning.sh      # unbound infra-* variants, ~11 min
+tests/run.sh                        # all scenarios, ~7 min
+tests/run.sh provider-down          # one scenario
+N=20 tests/run.sh                   # more queries per client
+tests/unbound-tuning.sh             # unbound infra-* variants, ~11 min
+tests/db-failover.sh                # 15 s TTL record changes IP, ~1 min
+tests/db-failover.sh providers-down # same, provider resolvers down
 ```
 
 Lookups go through glibc (`getent ahosts`), the same path PHP and curl use.
@@ -175,59 +212,82 @@ Failures are simulated with `docker pause` (timeout), `docker stop` (host gone) 
 | provider-down | both provider resolvers time out |
 | resolvers-down | both providers and the public resolver time out; the root still works |
 | total-outage | everything upstream paused; query a name cached 8 s earlier with TTL 5 s |
-| recovered | providers down, clients fail over, providers back for 70 s. Then the public resolver is paused and client-unbound is blocked from the root, so only the provider path works |
+| recovered | providers down, clients fail over, providers back for 70 s. Then the public resolver is paused and client-unbound is blocked from the root, so only the provider path works. client-recursive is not blocked |
 
 ### Full results
 
-Run `results/20261105-091810.txt`. 5 unique (cache-miss) lookups per client, 3 for total-outage.
+Run `results/20261105-100009.txt`. 5 unique (cache-miss) lookups per client, 3 for total-outage.
 
 | Scenario | Client | ok | p50 s | p95 s | max s |
 |---|---|---|---:|---:|---:|
 | baseline | glibc | 5/5 | 0.002 | 0.003 | 0.003 |
-| baseline | glibc-tuned | 5/5 | 0.003 | 0.005 | 0.005 |
-| baseline | resolved | 5/5 | 0.003 | 0.004 | 0.004 |
-| baseline | resolved-public | 5/5 | 0.002 | 0.004 | 0.004 |
-| baseline | unbound | 5/5 | 0.002 | 0.003 | 0.003 |
-| dns1-timeout | glibc | 5/5 | 5.014 | 5.017 | 5.017 |
-| dns1-timeout | glibc-tuned | 5/5 | 1.008 | 1.013 | 1.013 |
-| dns1-timeout | resolved | 5/5 | 0.003 | 5.010 | 5.010 |
-| dns1-timeout | resolved-public | 5/5 | 0.004 | 5.012 | 5.012 |
-| dns1-timeout | unbound | 5/5 | 0.005 | 0.296 | 0.296 |
-| dns1-down | glibc | 5/5 | 5.016 | 5.018 | 5.018 |
-| dns1-down | glibc-tuned | 5/5 | 1.009 | 1.014 | 1.014 |
-| dns1-down | resolved | 5/5 | 0.002 | 5.010 | 5.010 |
-| dns1-down | resolved-public | 5/5 | 0.002 | 5.010 | 5.010 |
-| dns1-down | unbound | 5/5 | 0.003 | 0.387 | 0.387 |
-| dns1-servfail | glibc | 5/5 | 0.002 | 0.004 | 0.004 |
-| dns1-servfail | glibc-tuned | 5/5 | 0.004 | 0.005 | 0.005 |
+| baseline | glibc-tuned | 5/5 | 0.002 | 0.004 | 0.004 |
+| baseline | recursive | 5/5 | 0.002 | 0.004 | 0.004 |
+| baseline | resolved | 5/5 | 0.002 | 0.003 | 0.003 |
+| baseline | resolved-public | 5/5 | 0.004 | 0.005 | 0.005 |
+| baseline | unbound | 5/5 | 0.003 | 0.004 | 0.004 |
+| dns1-timeout | glibc | 5/5 | 5.017 | 5.022 | 5.022 |
+| dns1-timeout | glibc-tuned | 5/5 | 1.013 | 1.015 | 1.015 |
+| dns1-timeout | recursive | 5/5 | 0.002 | 0.002 | 0.002 |
+| dns1-timeout | resolved | 5/5 | 0.004 | 5.021 | 5.021 |
+| dns1-timeout | resolved-public | 5/5 | 0.003 | 5.008 | 5.008 |
+| dns1-timeout | unbound | 5/5 | 0.004 | 0.296 | 0.296 |
+| dns1-down | glibc | 5/5 | 5.009 | 5.021 | 5.021 |
+| dns1-down | glibc-tuned | 5/5 | 1.013 | 1.017 | 1.017 |
+| dns1-down | recursive | 5/5 | 0.001 | 0.002 | 0.002 |
+| dns1-down | resolved | 5/5 | 0.003 | 5.008 | 5.008 |
+| dns1-down | resolved-public | 5/5 | 0.004 | 5.012 | 5.012 |
+| dns1-down | unbound | 5/5 | 0.005 | 0.386 | 0.386 |
+| dns1-servfail | glibc | 5/5 | 0.004 | 0.006 | 0.006 |
+| dns1-servfail | glibc-tuned | 5/5 | 0.006 | 0.011 | 0.011 |
+| dns1-servfail | recursive | 5/5 | 0.002 | 0.004 | 0.004 |
 | dns1-servfail | resolved | 5/5 | 0.002 | 0.004 | 0.004 |
-| dns1-servfail | resolved-public | 5/5 | 0.002 | 0.003 | 0.003 |
+| dns1-servfail | resolved-public | 5/5 | 0.005 | 0.012 | 0.012 |
 | dns1-servfail | unbound | 5/5 | 0.002 | 0.003 | 0.003 |
-| provider-down | glibc | 0/5 | 20.036 | 20.038 | 20.038 |
-| provider-down | glibc-tuned | 0/5 | 4.021 | 4.031 | 4.031 |
-| provider-down | resolved | 0/5 | 10.020 | 10.027 | 10.027 |
-| provider-down | resolved-public | 4/5 | 0.009 | 10.019 | 10.019 |
-| provider-down | unbound | 5/5 | 0.004 | 0.669 | 0.669 |
-| resolvers-down | glibc | 0/5 | 20.038 | 20.053 | 20.053 |
-| resolvers-down | glibc-tuned | 0/5 | 4.027 | 4.031 | 4.031 |
-| resolvers-down | resolved | 0/5 | 10.023 | 10.025 | 10.025 |
-| resolvers-down | resolved-public | 0/5 | 10.024 | 10.026 | 10.026 |
-| resolvers-down | unbound | 5/5 | 0.002 | 0.681 | 0.681 |
-| total-outage | glibc | 0/3 | 20.034 | 20.043 | 20.043 |
-| total-outage | glibc-tuned | 0/3 | 4.019 | 4.025 | 4.025 |
-| total-outage | resolved | 0/3 | 10.019 | 10.022 | 10.022 |
-| total-outage | resolved-public | 0/3 | 10.025 | 10.026 | 10.026 |
-| total-outage | unbound | 3/3 | 0.005 | 1.420 | 1.420 |
-| recovered | glibc | 5/5 | 0.004 | 0.006 | 0.006 |
-| recovered | glibc-tuned | 5/5 | 0.004 | 0.007 | 0.007 |
-| recovered | resolved | 5/5 | 0.002 | 0.003 | 0.003 |
-| recovered | resolved-public | 5/5 | 0.004 | 5.014 | 5.014 |
-| recovered | unbound | 5/5 | 0.002 | 0.007 | 0.007 |
+| provider-down | glibc | 0/5 | 20.041 | 20.046 | 20.046 |
+| provider-down | glibc-tuned | 0/5 | 4.027 | 4.037 | 4.037 |
+| provider-down | recursive | 5/5 | 0.003 | 0.004 | 0.004 |
+| provider-down | resolved | 0/5 | 10.025 | 10.027 | 10.027 |
+| provider-down | resolved-public | 4/5 | 0.008 | 10.019 | 10.019 |
+| provider-down | unbound | 5/5 | 0.004 | 0.675 | 0.675 |
+| resolvers-down | glibc | 0/5 | 20.038 | 20.050 | 20.050 |
+| resolvers-down | glibc-tuned | 0/5 | 4.026 | 4.032 | 4.032 |
+| resolvers-down | recursive | 5/5 | 0.002 | 0.002 | 0.002 |
+| resolvers-down | resolved | 0/5 | 10.019 | 10.023 | 10.023 |
+| resolvers-down | resolved-public | 0/5 | 10.026 | 10.029 | 10.029 |
+| resolvers-down | unbound | 5/5 | 0.005 | 0.674 | 0.674 |
+| total-outage | glibc | 0/3 | 20.041 | 20.044 | 20.044 |
+| total-outage | glibc-tuned | 0/3 | 4.028 | 4.029 | 4.029 |
+| total-outage | recursive | 3/3 | 1.816 | 1.819 | 1.819 |
+| total-outage | resolved | 0/3 | 10.015 | 10.021 | 10.021 |
+| total-outage | resolved-public | 0/3 | 10.027 | 10.028 | 10.028 |
+| total-outage | unbound | 3/3 | 0.010 | 0.957 | 0.957 |
+| recovered | glibc | 5/5 | 0.002 | 0.006 | 0.006 |
+| recovered | glibc-tuned | 5/5 | 0.001 | 0.002 | 0.002 |
+| recovered | recursive | 5/5 | 0.003 | 0.006 | 0.006 |
+| recovered | resolved | 5/5 | 0.003 | 0.004 | 0.004 |
+| recovered | resolved-public | 5/5 | 0.005 | 5.017 | 5.017 |
+| recovered | unbound | 5/5 | 0.001 | 0.001 | 0.001 |
 
 Current DNS server 70 s after the providers came back:
 
-- resolved: `10.53.0.11` (provider)
+- resolved: `10.53.0.12` (provider)
 - resolved-public: `10.53.0.53` (still on the public resolver)
 
-The 5.014 s max for resolved-public in `recovered` is that pinning: it first times out on the
+The 5.017 s max for resolved-public in `recovered` is that pinning: it first times out on the
 paused public resolver, then moves to a provider.
+
+### Database failover
+
+`results/db-failover-normal-20261105-101304.txt` and
+`results/db-failover-providers-down-20261105-101328.txt`. Polled every 0.5 s for up to 90 s.
+`old` = lookups that still returned the old IP, `fail` = failed lookups.
+
+| Client | Healthy: new IP after s | old | fail | Providers down: new IP after s | old | fail |
+|---|---:|---:|---:|---:|---:|---:|
+| glibc | 10.0 | 19 | 0 | >90 | 0 | 5 |
+| glibc-tuned | 10.1 | 19 | 0 | >90 | 0 | 20 |
+| resolved | 10.1 | 19 | 0 | >90 | 17 | 8 |
+| resolved-public | 10.1 | 19 | 0 | 20.2 | 18 | 1 |
+| unbound | 10.1 | 19 | 0 | 8.7 | 16 | 0 |
+| recursive | 8.6 | 16 | 0 | 8.1 | 15 | 0 |

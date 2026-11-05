@@ -34,4 +34,9 @@ case "$(cat /proc/sys/kernel/hostname)" in
     resolv "nameserver 127.0.0.1"
     systemctl start --no-block unbound
     ;;
+  client-recursive)
+    cp /etc/lab/unbound-recursive-client.conf /etc/unbound/unbound.conf
+    resolv "nameserver 127.0.0.1"
+    systemctl start --no-block unbound
+    ;;
 esac

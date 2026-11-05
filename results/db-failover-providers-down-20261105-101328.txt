@@ -1,0 +1,7 @@
+client                   new_ip_s   old  fail
+client-glibc                  >90     0     5
+client-glibc-tuned            >90     0    20
+client-recursive              8.1    15     0
+client-resolved               >90    17     8
+client-resolved-public       20.2    18     1
+client-unbound                8.7    16     0

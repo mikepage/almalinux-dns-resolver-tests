@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 N=${N:-5}
-CLIENTS=(client-glibc client-glibc-tuned client-resolved client-resolved-public client-unbound)
+CLIENTS=(client-glibc client-glibc-tuned client-resolved client-resolved-public client-unbound client-recursive)
 SERVERS=(root provider-dns1 provider-dns2 public-dns)
 
 dc() { docker compose "$@"; }
@@ -24,6 +24,7 @@ reset() {
   ex client-resolved systemctl restart systemd-resolved
   ex client-resolved-public systemctl restart systemd-resolved
   ex client-unbound sh -c 'iptables -F OUTPUT; systemctl restart unbound'
+  ex client-recursive systemctl restart unbound
   for c in "${CLIENTS[@]}"; do
     for _ in $(seq 1 30); do ex "$c" getent ahosts www.lab.test >/dev/null 2>&1 && break; sleep 1; done
   done
@@ -57,6 +58,7 @@ s_total_outage() {
 # Providers fail, clients fail over, providers come back. Do clients go back to them?
 # Afterwards only the provider path works: public resolver paused, and client-unbound
 # blocked from recursing itself. A client still pinned to its fallback pays for it here.
+# client-recursive never uses the providers, so it is not blocked.
 s_recovery() {
   dc pause provider-dns1 provider-dns2 >/dev/null
   measure failover unique 3 >/dev/null
