@@ -1,6 +1,7 @@
 # Test results
 
 2026-11-05, one run, 5 lookups per client unless noted. Times in seconds.
+Tables are from AlmaLinux 9; AlmaLinux 10 gave the same results, see [AlmaLinux 10](#almalinux-10).
 Clients: see [Lab](../README.md#lab).
 
 ## Summary per scenario
@@ -20,9 +21,39 @@ Clients: see [Lab](../README.md#lab).
 
 "unbound forward" uses the tuned config. With unbound defaults it does much worse.
 
+## AlmaLinux 10
+
+AlmaLinux 10.2: systemd 257, glibc 2.39, unbound 1.24.2. Same tests, `EL=10`.
+Raw: [`el10-20261105-102906.txt`](el10-20261105-102906.txt),
+[`el10-unbound-tuning-20261105-104517.txt`](el10-unbound-tuning-20261105-104517.txt),
+[`el10-db-failover-normal-20261105-104145.txt`](el10-db-failover-normal-20261105-104145.txt),
+[`el10-db-failover-providers-down-20261105-104304.txt`](el10-db-failover-providers-down-20261105-104304.txt).
+
+| Check | AlmaLinux 9 | AlmaLinux 10 |
+|---|---|---|
+| Both providers down: resolved `FallbackDNS=` | 0/5, 10.0 s each | 0/5, 10.0 s each |
+| Both providers down: unbound forward, max | 0.68 s | 0.68 s |
+| Both providers down: unbound recursive, max | 0.004 s | 0.004 s |
+| Everything down, expired cache: resolved | 0/3 | 0/3 |
+| Everything down, expired cache: unbound forward / recursive | 3/3 / 3/3 | 3/3 / 3/3 |
+| After recovery: resolved-public current server | public | public |
+| DB failover, providers down: unbound forward / recursive | 8.7 / 8.1 s | 8.4 / 7.8 s |
+| DB failover, providers down: resolved-public | 20.2 s | 16.9 s |
+| Unbound tuning, defaults: first answer | 300 s | 300 s |
+| Unbound tuning, max-rtt 500 + host-ttl 60 | 6/6, 0.8 s, recovery 5/5 | 6/6, 0.8 s, recovery 5/5 |
+
+Both resolved configs set `StaleRetentionSec=1800` (ignored on 252, active on 257). It still
+gave no stale answers on AlmaLinux 10. Checked by hand with the upstreams blocked by iptables:
+`resolvectl query -t A` for a name cached 7 s earlier timed out after 120 s instead of
+answering stale; via the stub listener, glibc and `dig` gave up after 10–15 s.
+
+Lab limitation: Docker Desktop steps the VM clock every 30 s, and resolved logs
+"Clock change detected. Flushing caches." on every step. Its cache can be emptied
+mid-test, so resolved's cache-dependent results may be worse than on a real server.
+
 ## Unbound tuning results
 
-Applies to the forwarding setup only. Raw: [`unbound-tuning-20261105-093118.txt`](unbound-tuning-20261105-093118.txt). `tests/unbound-tuning.sh`, client-unbound only, one run
+Applies to the forwarding setup only. Raw: [`el9-unbound-tuning-20261105-093118.txt`](el9-unbound-tuning-20261105-093118.txt). `tests/unbound-tuning.sh`, client-unbound only, one run
 per variant.
 
 - **Failover:** both provider resolvers time out. 6 lookups (`dig`, 60 s timeout).
@@ -61,7 +92,7 @@ per variant.
 
 ## Full results
 
-Raw: [`20261105-100009.txt`](20261105-100009.txt). 5 unique (cache-miss) lookups per client, 3 for total-outage.
+Raw: [`el9-20261105-100009.txt`](el9-20261105-100009.txt). 5 unique (cache-miss) lookups per client, 3 for total-outage.
 
 | Scenario | Client | ok | p50 s | p95 s | max s |
 |---|---|---|---:|---:|---:|
@@ -124,8 +155,8 @@ paused public resolver, then moves to a provider.
 
 ## Database failover
 
-Raw: [`db-failover-normal-20261105-101304.txt`](db-failover-normal-20261105-101304.txt) and
-[`db-failover-providers-down-20261105-101328.txt`](db-failover-providers-down-20261105-101328.txt). Polled every 0.5 s for up to 90 s.
+Raw: [`el9-db-failover-normal-20261105-101304.txt`](el9-db-failover-normal-20261105-101304.txt) and
+[`el9-db-failover-providers-down-20261105-101328.txt`](el9-db-failover-providers-down-20261105-101328.txt). Polled every 0.5 s for up to 90 s.
 `old` = lookups that still returned the old IP, `fail` = failed lookups.
 
 | Client | Healthy: new IP after s | old | fail | Providers down: new IP after s | old | fail |

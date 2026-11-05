@@ -76,7 +76,7 @@ ALL=(baseline dns1-timeout dns1-down dns1-servfail provider-down resolvers-down 
 SCENARIOS=("${@:-${ALL[@]}}")
 
 mkdir -p results
-out="results/$(date +%Y%m%d-%H%M%S).txt"
+out="results/el${EL:-9}-$(date +%Y%m%d-%H%M%S).txt"
 {
   printf '%-16s %-24s %7s %7s %7s %7s\n' scenario client ok p50_ms p95_ms max_ms
   for sc in "${SCENARIOS[@]}"; do

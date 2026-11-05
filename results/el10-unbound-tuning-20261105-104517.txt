@@ -1,0 +1,5 @@
+variant                    failover_ok  first_answer_after_ms  recovery_ok 
+defaults                   1/6          300423                 5/5         
+max-rtt 1500               5/6          60134                  0/5         
+max-rtt 500                6/6          777                    0/5         
+max-rtt 500, host-ttl 60   6/6          786                    5/5         

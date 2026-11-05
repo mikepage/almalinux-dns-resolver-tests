@@ -1,4 +1,5 @@
-FROM almalinux/9-init
+ARG BASE=almalinux/9-init
+FROM ${BASE}
 
 RUN dnf -y install epel-release \
  && dnf -y install unbound nsd bind-utils systemd-resolved iptables-nft iproute procps-ng \

@@ -59,7 +59,7 @@ set_ip "$NEW"
 t0=$(date +%s%N)
 
 mkdir -p results
-out="results/db-failover-$MODE-$(date +%Y%m%d-%H%M%S).txt"
+out="results/el${EL:-9}-db-failover-$MODE-$(date +%Y%m%d-%H%M%S).txt"
 {
   printf '%-24s %8s %5s %5s\n' client new_ip_s old fail
   pids=()

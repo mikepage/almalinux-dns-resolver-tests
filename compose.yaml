@@ -2,14 +2,16 @@
 #   root          authoritative "internet" (fake root + test. zone), 10.53.0.5
 #   provider-dns* the VPS provider's internal recursive resolvers, 10.53.0.11/.12
 #   public-dns    a public resolver (stand-in for 9.9.9.9 / 1.1.1.1), 10.53.0.53
-#   client-*      AlmaLinux 9 VMs, each with a different resolver setup
+#   client-*      AlmaLinux VMs, each with a different resolver setup
+#
+# AlmaLinux 9 by default. EL=10 docker compose up -d --build for AlmaLinux 10.
 #
 # The network is internal: nothing leaves the lab, results are deterministic.
 
 name: dnslab
 
 x-node: &node
-  image: dnslab-node
+  image: dnslab-node:el${EL:-9}
   privileged: true
   cgroup: private
   stop_signal: SIGRTMIN+3
@@ -25,7 +27,10 @@ networks:
 services:
   root:
     <<: *node
-    build: { context: ., dockerfile: image/Containerfile }
+    build:
+      context: .
+      dockerfile: image/Containerfile
+      args: { BASE: "almalinux/${EL:-9}-init" }
     hostname: root
     networks: { vpsnet: { ipv4_address: 10.53.0.5 } }
 

@@ -40,7 +40,7 @@ lookups() { # <count> <dig timeout s>
 }
 
 mkdir -p results
-out="results/unbound-tuning-$(date +%Y%m%d-%H%M%S).txt"
+out="results/el${EL:-9}-unbound-tuning-$(date +%Y%m%d-%H%M%S).txt"
 {
   printf '%-26s %-12s %-22s %-12s\n' variant failover_ok first_answer_after_ms recovery_ok
   for v in "${VARIANTS[@]}"; do
