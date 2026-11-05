@@ -1,0 +1,17 @@
+FROM almalinux/9-init
+
+RUN dnf -y install epel-release \
+ && dnf -y install unbound nsd bind-utils systemd-resolved iptables-nft iproute procps-ng \
+ && dnf clean all \
+ && systemctl disable unbound nsd systemd-resolved \
+ && systemctl mask unbound-keygen.service unbound-anchor.timer
+
+# unbound-anchor needs the real internet; the lab has no DNSSEC.
+COPY image/unbound-lab.conf /etc/systemd/system/unbound.service.d/lab.conf
+COPY image/lab-setup.service /etc/systemd/system/lab-setup.service
+COPY --chmod=755 image/lab-setup /usr/local/bin/lab-setup
+RUN systemctl enable lab-setup.service
+
+# Baked in, not bind-mounted: Docker Desktop file sharing can serve stale file contents.
+COPY config /etc/lab
+COPY --chmod=755 tests /lab/tests

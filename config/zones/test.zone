@@ -1,0 +1,10 @@
+$ORIGIN test.
+$TTL 300
+@           SOA ns1.test. hostmaster.test. 1 1800 900 604800 60
+@           NS  ns1
+ns1         A   10.53.0.5
+www.lab     A   10.10.0.10
+; short TTL, used by the stale-cache scenario
+short.lab 5 A   10.10.0.11
+; every u<random>.lab.test resolves, so each query is a cache miss
+*.lab    60 A   10.10.0.99

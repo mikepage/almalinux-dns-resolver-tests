@@ -1,0 +1,37 @@
+#!/bin/bash
+# Configures the node by hostname. Config files come from /etc/lab (bind mount of ./config).
+set -euo pipefail
+
+resolv() { printf '%s\n' "$@" > /etc/resolv.conf; }
+
+case "$(cat /proc/sys/kernel/hostname)" in
+  root)
+    cp /etc/lab/zones/nsd.conf /etc/nsd/nsd.conf
+    systemctl start --no-block nsd
+    ;;
+  provider-dns1|provider-dns2|public-dns)
+    cp /etc/lab/unbound-recursive.conf /etc/unbound/unbound.conf
+    systemctl start --no-block unbound
+    ;;
+  client-glibc)
+    resolv "nameserver 10.53.0.11" "nameserver 10.53.0.12"
+    ;;
+  client-glibc-tuned)
+    resolv "nameserver 10.53.0.11" "nameserver 10.53.0.12" "options timeout:1 attempts:2"
+    ;;
+  client-resolved)
+    cp /etc/lab/resolved.conf /etc/systemd/resolved.conf
+    resolv "nameserver 127.0.0.53" "options edns0 trust-ad"
+    systemctl start --no-block systemd-resolved
+    ;;
+  client-resolved-public)
+    cp /etc/lab/resolved-public.conf /etc/systemd/resolved.conf
+    resolv "nameserver 127.0.0.53" "options edns0 trust-ad"
+    systemctl start --no-block systemd-resolved
+    ;;
+  client-unbound)
+    cp /etc/lab/unbound-client.conf /etc/unbound/unbound.conf
+    resolv "nameserver 127.0.0.1"
+    systemctl start --no-block unbound
+    ;;
+esac

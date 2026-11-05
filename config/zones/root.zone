@@ -1,0 +1,7 @@
+$ORIGIN .
+$TTL 86400
+@               SOA a.root.lab. hostmaster.lab. 1 1800 900 604800 86400
+@               NS  a.root.lab.
+a.root.lab.     A   10.53.0.5
+test.           NS  ns1.test.
+ns1.test.       A   10.53.0.5

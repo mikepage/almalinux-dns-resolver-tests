@@ -1,0 +1,75 @@
+# Offline DNS lab that mirrors a VPS setup:
+#   root          authoritative "internet" (fake root + test. zone), 10.53.0.5
+#   provider-dns* the VPS provider's internal recursive resolvers, 10.53.0.11/.12
+#   public-dns    a public resolver (stand-in for 9.9.9.9 / 1.1.1.1), 10.53.0.53
+#   client-*      AlmaLinux 9 VMs, each with a different resolver setup
+#
+# The network is internal: nothing leaves the lab, results are deterministic.
+
+name: dnslab
+
+x-node: &node
+  image: dnslab-node
+  privileged: true
+  cgroup: private
+  stop_signal: SIGRTMIN+3
+  tmpfs: [/run, /run/lock, /tmp]
+
+networks:
+  vpsnet:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.53.0.0/24
+
+services:
+  root:
+    <<: *node
+    build: { context: ., dockerfile: image/Containerfile }
+    hostname: root
+    networks: { vpsnet: { ipv4_address: 10.53.0.5 } }
+
+  provider-dns1:
+    <<: *node
+    hostname: provider-dns1
+    networks: { vpsnet: { ipv4_address: 10.53.0.11 } }
+
+  provider-dns2:
+    <<: *node
+    hostname: provider-dns2
+    networks: { vpsnet: { ipv4_address: 10.53.0.12 } }
+
+  public-dns:
+    <<: *node
+    hostname: public-dns
+    networks: { vpsnet: { ipv4_address: 10.53.0.53 } }
+
+  # AlmaLinux default: NetworkManager writes the provider resolvers to resolv.conf, no options.
+  client-glibc:
+    <<: *node
+    hostname: client-glibc
+    networks: { vpsnet: { ipv4_address: 10.53.0.101 } }
+
+  # Same, with options timeout:1 attempts:2.
+  client-glibc-tuned:
+    <<: *node
+    hostname: client-glibc-tuned
+    networks: { vpsnet: { ipv4_address: 10.53.0.102 } }
+
+  # systemd-resolved, DNS=provider resolvers, FallbackDNS=public resolver.
+  client-resolved:
+    <<: *node
+    hostname: client-resolved
+    networks: { vpsnet: { ipv4_address: 10.53.0.103 } }
+
+  # systemd-resolved, public resolver as third entry in DNS=.
+  client-resolved-public:
+    <<: *node
+    hostname: client-resolved-public
+    networks: { vpsnet: { ipv4_address: 10.53.0.104 } }
+
+  # Local unbound forwarding to provider resolvers, forward-first + serve-expired.
+  client-unbound:
+    <<: *node
+    hostname: client-unbound
+    networks: { vpsnet: { ipv4_address: 10.53.0.105 } }

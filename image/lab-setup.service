@@ -1,0 +1,11 @@
+[Unit]
+Description=Configure this node for its role in the DNS lab
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/lab-setup
+
+[Install]
+WantedBy=multi-user.target
